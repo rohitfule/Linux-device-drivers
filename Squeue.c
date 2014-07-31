@@ -2,9 +2,10 @@
  * Rohit Fule
  * CSE 598: Embedded Systems Programming
  * Assignment 2 Part 2 : Device Driver for Shared Queues 
- * Description: A charachter device driver to enqueue and dequeue
- * message tokens from two shared circular-buffers and append timestamp
- * to every message on both enqueue and dequeue operations on it. 
+ * Description: A charachter device driver to enqueue and dequeue message 
+ * tokens from two shared circular-buffers and append timestamp read from 
+ * the high resolution timer of OMAP DM-3730, to every message on both 
+ * enqueue and dequeue operations on it. 
  */
  
 #include <linux/module.h>
@@ -33,8 +34,7 @@ extern unsigned int hrt_read_count(void);
 
 
 /* token structure */
-struct token
-{
+struct token {
 	unsigned int id;
 	unsigned int timestamp1;
 	unsigned int timestamp2;
@@ -73,25 +73,23 @@ int sq_open(struct inode *inode, struct file *file) {
  * else 
  *     return -1
  */ 
-ssize_t sq_read(struct file *file, char* bufStoreData, size_t bufCount, loff_t* curOffset){
+ssize_t sq_read(struct file *file, char* bufStoreData, size_t bufCount, loff_t* curOffset) {
 	int ret = -1;
 	struct Squeue *sq = file->private_data;
 	printk(KERN_INFO "%s: Reading from device\n",sq->name);
 	
-	if(bufStoreData && bufCount && sq->count)
-	{
+	if (bufStoreData && bufCount > 0 && sq->count) {
 		/* read high resolution timer value */
 		sq->tokenp[sq->head]->timestamp3 = hrt_read_count();
 		ret = copy_to_user(bufStoreData,(void *)sq->tokenp[sq->head],sizeof(struct token));
-		if(ret)
+		if (ret)
 			return -EFAULT;		
 		kfree(sq->tokenp[sq->head]);
 		sq->tokenp[sq->head] = NULL;
 		sq->head++;
-		if(sq->head == 10) 
+		if (sq->head == 10) 
 			sq->head = 0;
 		sq->count--;
-		return ret;
 	}
 	return ret;
 }
@@ -177,7 +175,7 @@ static int __init driver_entry(void) {
 	sq1 = kmalloc(sizeof(struct Squeue),GFP_KERNEL);
 	if(!sq1) {
 		printk(KERN_ALERT "Squeue1: device kmalloc failed\n");
-		return -1;
+		goto sq1_mem_err;
 	}
 	sprintf(sq1->name,DEVICE1_NAME);
 	sq1->head = 0;
@@ -190,7 +188,7 @@ static int __init driver_entry(void) {
 	sq2 = kmalloc(sizeof(struct Squeue),GFP_KERNEL);
 	if(!sq2) {
 		printk(KERN_ALERT "Squeue2: device kmalloc failed\n");
-		return -1;
+		goto sq2_mem_err;
 	}
 	sprintf(sq2->name,DEVICE2_NAME);
 	sq2->head = 0;
@@ -210,19 +208,14 @@ static int __init driver_entry(void) {
 	
 	ret = cdev_add(&sq1->cdev, MKDEV(MAJOR(Squeue_dev_num),0), 1);
 	if(ret < 0) {
-		kfree(sq1);
-		kfree(sq2);
 		printk(KERN_ALERT "Squeue1: unable to add cdev to kernel\n");
-		return ret;
+		goto sq1_cdev_err;
 	}
 
 	ret = cdev_add(&sq2->cdev, MKDEV(MAJOR(Squeue_dev_num),1), 1);
    	if(ret < 0) {
-		cdev_del(&sq1->cdev);
-		kfree(sq1);
-		kfree(sq2);		
 		printk(KERN_ALERT "Squeue2: unable to add cdev to kernel\n");
-		return ret;
+		goto sq2_cdev_err;
 	}
 	
 	/* initialize rw semaphore */
@@ -235,6 +228,18 @@ static int __init driver_entry(void) {
 	
     printk(KERN_INFO "Squeue: loaded module\n");
 	return 0;
+	
+	sq2_cdev_err:
+		cdev_del(&sq1->cdev);
+	sq1_cdev_err:
+		kfree(sq2);
+	sq2_mem_err:
+		kfree(sq1);
+	sq1_mem_err:
+		class_destroy(dev_class);
+		unregister_chrdev_region(Squeue_dev_num,2);
+	return -1;
+	
 }
 
 
@@ -244,7 +249,6 @@ static int __init driver_entry(void) {
  * Destroy charachter devices and class
  */
 static void driver_exit(void) {
-	
 	unregister_chrdev_region(Squeue_dev_num,2);
 	device_destroy(dev_class,MKDEV(MAJOR(Squeue_dev_num),0));
 	device_destroy(dev_class,MKDEV(MAJOR(Squeue_dev_num),1));
@@ -253,7 +257,7 @@ static void driver_exit(void) {
 	kfree(sq1);
 	kfree(sq2);
 	class_destroy(dev_class);
-	printk(KERN_ALERT "Squeue: unloaded module\n");
+	printk(KERN_INFO "Squeue: unloaded module\n");
 }
 
 
